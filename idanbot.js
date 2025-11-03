@@ -63,7 +63,7 @@ async function startBot() {
     const text =
       msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
-    if (text.startsWith("idanmovie")) {
+    if (text.startsWith("idanmovie".toLowerCase())) {
       const movieName = text.split("idanmovie")[1].trim();
       if (!movieName) {
         await sock.sendMessage(sender, {
@@ -115,7 +115,7 @@ async function startBot() {
           text: "⚠️ Something went wrong while searching for the movie.",
         });
       }
-    } else if (text.startsWith("idananime")) {
+    } else if (text.startsWith("idananime".toLowerCase())) {
       const animeName = text.split("idananime")[1].trim();
       if (!animeName) {
         await sock.sendMessage(sender, {
@@ -163,7 +163,7 @@ async function startBot() {
           text: "⚠️ Something went wrong while searching for the movie.",
         });
       }
-    } else if (text.startsWith("idanai")) {
+    } else if (text.startsWith("idanai".toLowerCase())) {
       const context = text.split("idanai")[1].trim();
       if (!context) {
         await sock.sendMessage(sender, {
