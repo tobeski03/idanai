@@ -1,4 +1,5 @@
 // idanbot.js
+const express = require("express");
 const {
   makeWASocket,
   useMultiFileAuthState,
@@ -10,6 +11,7 @@ const dotenv = require("dotenv");
 const axios = require("axios");
 const { GoogleGenAI } = require("@google/genai");
 dotenv.config();
+const app = express();
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -63,8 +65,8 @@ async function startBot() {
     const text =
       msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
-    if (text.startsWith("idanmovie".toLowerCase())) {
-      const movieName = text.split("idanmovie")[1].trim();
+    if (text.toLowerCase().startsWith("idanmovie")) {
+      const movieName = text.toLowerCase().split("idanmovie")[1].trim();
       if (!movieName) {
         await sock.sendMessage(sender, {
           text: "Please provide a movie name.",
@@ -115,8 +117,8 @@ async function startBot() {
           text: "⚠️ Something went wrong while searching for the movie.",
         });
       }
-    } else if (text.startsWith("idananime".toLowerCase())) {
-      const animeName = text.split("idananime")[1].trim();
+    } else if (text.toLowerCase().startsWith("idananime")) {
+      const animeName = text.toLowerCase().split("idananime")[1].trim();
       if (!animeName) {
         await sock.sendMessage(sender, {
           text: "Please provide an anime name.",
@@ -163,8 +165,8 @@ async function startBot() {
           text: "⚠️ Something went wrong while searching for the movie.",
         });
       }
-    } else if (text.startsWith("idanai".toLowerCase())) {
-      const context = text.split("idanai")[1].trim();
+    } else if (text.toLowerCase().startsWith("idanai")) {
+      const context = text.toLowerCase().split("idanai")[1].trim();
       if (!context) {
         await sock.sendMessage(sender, {
           text: "Please provide a prompt.",
@@ -189,3 +191,7 @@ async function startBot() {
 }
 
 startBot();
+
+app.get("/", (req, res) => res.send("✅ IdanBot is running!"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

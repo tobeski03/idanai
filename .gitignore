@@ -9,7 +9,7 @@ sw.*
 # Node dependencies
 node_modules
 .wwebjs_auth
-
+auth_info
 # Logs
 logs
 *.log
