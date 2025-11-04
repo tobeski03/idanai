@@ -66,7 +66,7 @@ async function startBot() {
       msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
     if (text.toLowerCase().startsWith("idanmovie")) {
-      const movieName = text.toLowerCase().split("idanmovie")[1].trim();
+      const movieName = text.toLowerCase().split("idanmovie")[1]?.trim();
       if (!movieName) {
         await sock.sendMessage(sender, {
           text: "Please provide a movie name.",
@@ -118,7 +118,7 @@ async function startBot() {
         });
       }
     } else if (text.toLowerCase().startsWith("idananime")) {
-      const animeName = text.toLowerCase().split("idananime")[1].trim();
+      const animeName = text.toLowerCase().split("idananime")[1]?.trim();
       if (!animeName) {
         await sock.sendMessage(sender, {
           text: "Please provide an anime name.",
@@ -166,7 +166,7 @@ async function startBot() {
         });
       }
     } else if (text.toLowerCase().startsWith("idanai")) {
-      const context = text.toLowerCase().split("idanai")[1].trim();
+      const context = text.toLowerCase().split("idanai")[1]?.trim();
       if (!context) {
         await sock.sendMessage(sender, {
           text: "Please provide a prompt.",

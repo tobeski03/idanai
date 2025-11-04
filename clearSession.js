@@ -14,3 +14,5 @@ const { MongoClient } = require("mongodb");
     await client.close();
   }
 })();
+
+// ssh -i ./idanai_key.pem azureuser@104.214.180.132
