@@ -1,0 +1,20 @@
+`
+_UBER ESCROW – LIVE TRACKING & PAYMENTS_
+
+_PASSENGER_
+
+1. Register Passenger
+2. Login
+3. Request Ride (GPS)
+4. My Rides
+5. Cancel Ride
+6. Deposit Funds
+7. Check Balance
+8. Release Funds
+9. Logout
+
+_DRIVER_ 2. Register Driver 3. Login 5. Go Online 6. Accept Ride 7. My Rides 9. Deposit Funds 10. Check Balance 12. Request Withdrawal 13. Logout 14. Go Offline
+
+Type _!help_ for menu | _!track_ for live location
+`.trim();
+43.98.186.132
