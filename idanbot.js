@@ -10,22 +10,126 @@ const qrcode = require("qrcode-terminal");
 const dotenv = require("dotenv");
 const axios = require("axios");
 const { UberAPI } = require("./src/api"); // <-- factory
-const { GoogleGenAI } = require("@google/genai");
 dotenv.config();
+const { GoogleGenerativeAI } = require("@google/generative-ai"); // Legacy import
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+if (!GEMINI_API_KEY) {
+  throw new Error("GEMINI_API_KEY not found in env! Check .env file.");
+}
+
+console.log("API Key loaded successfully"); // Debug log
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY); // Legacy init
+// const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const tools = [
+  {
+    functionDeclarations: [
+      {
+        name: "searchMovie",
+        description:
+          "Search for a movie by title and return details with poster, overview, release date, and link.",
+        parameters: {
+          type: "object",
+          properties: {
+            movieName: {
+              type: "string",
+              description:
+                "The exact or partial movie title the user is asking for.",
+            },
+          },
+          required: ["movieName"],
+        },
+      },
+    ],
+  },
+];
+const MODEL_FALLBACKS = [
+  "gemini-2.5-flash", // Your current (fast but overload-prone)
+  "gemini-2.0-flash-exp", // Experimental, often less loaded
+  "gemini-1.5-pro", // Legacy stable (if 2.x fails hard)
+];
 
-async function idanai(context) {
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: context,
-    });
-    return response.text;
-  } catch (error) {
-    console.error("AI error:", error);
+async function idanai(messages, sock, jid, modelIndex = 0) {
+  const modelName = MODEL_FALLBACKS[modelIndex];
+  if (!modelName) return "All AI models are currently down. Try again later.";
+
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    tools,
+    systemInstruction:
+      "You are Idan AI — a smart, funny, and helpful WhatsApp assistant. When someone asks about a movie, use the searchMovie tool. Otherwise, reply normally in a friendly Nigerian vibe.",
+  });
+
+  const maxRetries = 3;
+  let delay = 1000;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const history = messages.slice(0, -1).map((m) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
+
+      const lastMsg = messages[messages.length - 1].content;
+
+      const chat = model.startChat({
+        history,
+        generationConfig: { temperature: 0.8, maxOutputTokens: 512 },
+      });
+
+      const result = await chat.sendMessage(lastMsg);
+      const response = result.response;
+
+      // Check for function call
+      const functionCall = response.candidates?.[0]?.content?.parts?.find(
+        (p) => p.functionCall
+      )?.functionCall;
+
+      if (functionCall?.name === "searchMovie") {
+        const movieName = functionCall.args?.movieName;
+        if (movieName) {
+          await searchMovie(sock, jid, movieName);
+          // Optional: confirm
+          await sock.sendMessage(jid, {
+            text: `Found "${movieName}"! Check above`,
+          });
+        }
+        return; // Function handled — exit
+      }
+
+      // Normal text reply
+      const text = response.text();
+      return text;
+    } catch (error) {
+      console.error(
+        `Gemini Error (${modelName}, attempt ${i + 1}):`,
+        error.message
+      );
+
+      const isOverload =
+        error.status === 503 || /overloaded|UNAVAILABLE/i.test(error.message);
+
+      if (isOverload && i < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, delay));
+        delay *= 2;
+        continue;
+      }
+
+      if (isOverload || error.status === 404) {
+        return idanai(messages, sock, jid, modelIndex + 1); // Fallback model
+      }
+
+      if (error.message?.includes("SAFETY"))
+        return "Can't respond to that — blocked content.";
+      if (error.message?.includes("quota"))
+        return "Daily limit reached. Try tomorrow!";
+    }
   }
+
+  return "I'm having issues connecting to the AI. Try again in a bit!";
 }
 
 /* ==================== STATE ==================== */
@@ -126,47 +230,7 @@ async function startBot() {
 
       await sock.sendPresenceUpdate("composing", jid);
       await sock.sendMessage(jid, { text: "🔎 Searching, please wait..." });
-
-      try {
-        const response = await axios.get(
-          `https://mooviz.com.ng/api/imdb?movie=${encodeURIComponent(
-            movieName
-          )}&page=1`
-        );
-
-        const results = response.data.results;
-        if (!results || results.length === 0) {
-          await sock.sendMessage(jid, { text: "❌ No results found." });
-          return;
-        }
-
-        const movie = results[0];
-        const imageUrl = movie.poster_path
-          ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
-          : movie.image || null;
-
-        const caption = `🎬 *${movie.title}*\n\n${
-          movie.overview
-        }\n\n📅 Release Date: ${
-          movie.release_date
-        }\n🔗Link: https://mooviz.com.ng/movieView/${
-          movie.id
-        }?title=${encodeURIComponent(movie.title)}&type=movie`;
-
-        if (imageUrl) {
-          await sock.sendMessage(jid, {
-            image: { url: imageUrl },
-            caption,
-          });
-        } else {
-          await sock.sendMessage(jid, { text: caption });
-        }
-      } catch (err) {
-        console.error("Error fetching movie:", err.message);
-        await sock.sendMessage(jid, {
-          text: "⚠️ Something went wrong while searching for the movie.",
-        });
-      }
+      await searchMovie(sock, jid, movieName);
       return;
     }
     if (text.toLowerCase().startsWith("idananime")) {
@@ -220,32 +284,63 @@ async function startBot() {
       }
       return;
     }
+    // ——— Add this at the top of your file (outside any function) ———
+    const userChatHistory = new Map(); // Map<userJid, Array<{role: string, content: string}>>
+
+    // Optional: Limit history to last 20 messages per user (saves memory & tokens)
+    const MAX_HISTORY = 20;
+
+    // ——— Your improved message handler ———
     if (text.toLowerCase().startsWith("idanai")) {
-      // … (your existing AI code – unchanged)
-      const context = text.toLowerCase().split("idanai")[1]?.trim();
-      if (!context) {
+      const userId = jid;
+      const prompt = text.slice("idanai".length).trim(); // Keep original casing
+
+      if (!prompt) {
         await sock.sendMessage(jid, {
-          text: "Please provide a prompt.",
+          text: "Please provide a prompt after 'idanai'\nExample: idanai Who is the president of Nigeria?",
         });
         return;
       }
 
+      // Initialize history
+      if (!userChatHistory.has(userId)) {
+        userChatHistory.set(userId, []);
+      }
+      const history = userChatHistory.get(userId);
+
+      // Add user message
+      history.push({ role: "user", content: prompt });
+
+      // Limit history
+      if (history.length > MAX_HISTORY) {
+        history.splice(0, history.length - MAX_HISTORY);
+      }
+
       await sock.sendPresenceUpdate("composing", jid);
-      await sock.sendMessage(jid, { text: "🔎 thinking, please wait..." });
+      const thinkingMsg = await sock.sendMessage(jid, {
+        text: "thinking, please wait...",
+      });
 
       try {
-        const response = await idanai(context);
-        await sock.sendMessage(jid, { text: response });
+        // Call the upgraded idanai with function calling + sock/jid
+        const result = await idanai(history, sock, jid);
+
+        // If result is a string → normal text reply
+        if (typeof result === "string") {
+          await sock.sendMessage(jid, { text: result });
+          history.push({ role: "assistant", content: result });
+        }
+        // If result is undefined → function was called (like searchMovie), no extra message needed
       } catch (error) {
-        console.error("Error generating AI response:", error.message);
+        console.error("AI Error for", userId, ":", error.message || error);
         await sock.sendMessage(jid, {
-          text: "Sorry, something went wrong while generating the AI response.",
+          text: "Sorry, my brain is tired right now. Try again later!",
         });
+        history.pop(); // Clean up on error
       }
 
       return;
     }
-
     /* ---------- GPS ---------- */
     if (msg.message?.locationMessage) {
       const { degreesLatitude: lat, degreesLongitude: lng } =
@@ -461,6 +556,48 @@ Driver: ${ride.driver?.name ? `*${ride.driver.name}*` : "Matching..."}
   userState.set(jid, state);
 }
 
+async function searchMovie(sock, jid, movieName) {
+  try {
+    const response = await axios.get(
+      `https://mooviz.com.ng/api/imdb?movie=${encodeURIComponent(
+        movieName
+      )}&page=1`
+    );
+
+    const results = response.data.results;
+    if (!results || results.length === 0) {
+      await sock.sendMessage(jid, { text: "❌ No results found." });
+      return;
+    }
+
+    const movie = results[0];
+    const imageUrl = movie.poster_path
+      ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+      : movie.image || null;
+
+    const caption = `🎬 *${movie.title}*\n\n${
+      movie.overview
+    }\n\n📅 Release Date: ${
+      movie.release_date
+    }\n🔗Link: https://mooviz.com.ng/movieView/${
+      movie.id
+    }?title=${encodeURIComponent(movie.title)}&type=movie`;
+
+    if (imageUrl) {
+      await sock.sendMessage(jid, {
+        image: { url: imageUrl },
+        caption,
+      });
+    } else {
+      await sock.sendMessage(jid, { text: caption });
+    }
+  } catch (err) {
+    console.error("Error fetching movie:", err.message);
+    await sock.sendMessage(jid, {
+      text: "⚠️ Something went wrong while searching for the movie.",
+    });
+  }
+}
 /* ---------- MENU ---------- */
 async function handleMenu(jid, text, phone) {
   switch (text) {
@@ -603,7 +740,7 @@ Pending Withdrawal: *N${balance.pendingWithdrawals}*
         `
 *Withdraw Funds*
 
-Available: *N${balance.balance.toFixed(2)}*
+Available: *N${balance.balance}*
 Enter amount (min N1000):
   `.trim()
       );
