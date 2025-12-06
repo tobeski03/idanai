@@ -13,7 +13,8 @@ const { UberAPI } = require("./src/api"); // <-- factory
 dotenv.config();
 const { GoogleGenerativeAI } = require("@google/generative-ai"); // Legacy import
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+let GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+let google_api_key = process.env.MATRIX_API;
 if (!GEMINI_API_KEY) {
   throw new Error("GEMINI_API_KEY not found in env! Check .env file.");
 }
@@ -24,23 +25,196 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY); // Legacy init
 
 const app = express();
 // const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const conversations = new Map();
+let med_analysis = "";
+let rideNumber = "";
+let phone = "";
 const tools = [
   {
     functionDeclarations: [
+      // {
+      //   name: "searchMovie",
+      //   description:
+      //     "Search for a movie by title and return details with poster, overview, release date, and link.",
+      //   parameters: {
+      //     type: "object",
+      //     properties: {
+      //       movieName: {
+      //         type: "string",
+      //         description:
+      //           "The exact or partial movie title the user is asking for.",
+      //       },
+      //     },
+      //     required: ["movieName"],
+      //   },
+      // },
+      // {
+      //   name: "registerAsPassenger",
+      //   description:
+      //     "Initiate passenger registration. User needs to provide full name after this is called.",
+      //   parameters: {
+      //     type: "object",
+      //     properties: {},
+      //     required: [],
+      //   },
+      // },
+      // {
+      //   name: "registerAsDriver",
+      //   description:
+      //     "Initiate driver registration. User needs to provide full name after this is called.",
+      //   parameters: {
+      //     type: "object",
+      //     properties: {},
+      //     required: [],
+      //   },
+      // },
       {
-        name: "searchMovie",
+        name: "login",
         description:
-          "Search for a movie by title and return details with poster, overview, release date, and link.",
+          "Initiate login process. User will be prompted to enter their password.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "emergencyRide",
+        description:
+          "Handle ALL medical emergencies. Analyzes severity, sends formatted response to user, THEN calls requestRide. Makes sure user sends medical symptoms first before calling this. If emergency details are missing, ask user for more info.",
         parameters: {
           type: "object",
           properties: {
-            movieName: {
+            userMessage: {
               type: "string",
-              description:
-                "The exact or partial movie title the user is asking for.",
+              description: "The exact user message describing the emergency",
             },
           },
-          required: ["movieName"],
+          required: ["userMessage"],
+        },
+      },
+      {
+        name: "requestRide",
+        description:
+          "Ask for user's emergency first. Start the ride request process. User needs to provide pickup location (GPS pin).",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "goOnline",
+        description:
+          "Go online as a driver to start accepting rides. Only available for drivers.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "viewAvailableRides",
+        description:
+          "View all available rides waiting to be accepted by drivers.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "viewMyRides",
+        description:
+          "View your ride history including ride ID, status, and fare amount. Anything like: rides, my rides calls this.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "cancelRide",
+        description: "Cancel an active or pending ride.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "depositFunds",
+        description: "Deposit funds into your wallet (minimum N1000).",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "checkBalance",
+        description:
+          "Check your current wallet balance and pending withdrawals.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      // {
+      //   name: "releaseFunds",
+      //   description: "Release funds from your balance.",
+      //   parameters: {
+      //     type: "object",
+      //     properties: {},
+      //     required: [],
+      //   },
+      // },
+      {
+        name: "requestWithdrawal",
+        description:
+          "Request a withdrawal of funds from your wallet (minimum N1000).",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "logout",
+        description: "Log out from your account.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "goOffline",
+        description: "Go offline as a driver and stop accepting rides.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "viewTransactionHistory",
+        description:
+          "View your transaction history including deposits, withdrawals, and ride payments. Anything that looks like transaction or history calls this",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "completeRide",
+        description: "Complete an active ride and release funds to the driver.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
         },
       },
     ],
@@ -52,15 +226,17 @@ const MODEL_FALLBACKS = [
   "gemini-1.5-pro", // Legacy stable (if 2.x fails hard)
 ];
 
-async function idanai(messages, sock, jid, modelIndex = 0) {
+async function idanai(messages, sock, jid, modelIndex = 0, sender) {
+  console.log(modelIndex);
   const modelName = MODEL_FALLBACKS[modelIndex];
   if (!modelName) return "All AI models are currently down. Try again later.";
 
   const model = genAI.getGenerativeModel({
     model: modelName,
     tools,
-    systemInstruction:
-      "You are Idan AI — a smart, funny, and helpful WhatsApp assistant. When someone asks about a movie, use the searchMovie tool. Otherwise, reply normally in a friendly Nigerian vibe.",
+    systemInstruction: `You are MediLift — a smart, compassionate, and helpful WhatsApp assistant. You help users with medical emergency transport services. When someone asks about a movie, use the searchMovie tool. When they ask to deposit, withdraw, request a ride, or manage their account, intelligently call the appropriate menu function (depositFunds, requestWithdrawal, requestRide, etc.). 
+    Note Do not use conversational history when calling functions; focus ONLY on the user's CURRENT REQUEST.
+Users trust you with their LIVES. Always show them you understand their emergency BEFORE taking action.`,
   });
 
   const maxRetries = 3;
@@ -68,10 +244,19 @@ async function idanai(messages, sock, jid, modelIndex = 0) {
 
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const history = messages.slice(0, -1).map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
+      // const history = messages.slice(0, -1).map((m) => ({
+
+      //   role: m.role||user,
+      //   // role: m.role==="user" ? "user" : "model",
+      //   parts: [{ text: m.content }],
+      // }));
+      const history = messages.slice(0, -1).map((m, index) => {
+        console.log(`Mapping message ${index}:`, m);
+        return {
+          role: m.role === "assistant" ? "model" : "user", // Fallback
+          parts: [{ text: m.content || "" }],
+        };
+      });
 
       const lastMsg = messages[messages.length - 1].content;
 
@@ -79,7 +264,22 @@ async function idanai(messages, sock, jid, modelIndex = 0) {
         history,
         generationConfig: { temperature: 0.8, maxOutputTokens: 512 },
       });
-
+      // console.log("🔍 DEBUGGING MESSAGES:");
+      // console.log("• Total messages:", messages?.length || "UNDEFINED");
+      // console.log("• messages type:", typeof messages);
+      // console.log("• Raw messages:", messages);
+      if (!messages || !Array.isArray(messages)) {
+        console.log("❌ ERROR: messages is NOT an array!");
+        return "Error: No conversation history";
+      }
+      // messages.forEach((msg, index) => {
+      //   console.log(`Message ${index}:`, {
+      //     role: msg?.role,
+      //     content: msg?.content,
+      //     hasRole: !!msg?.role,
+      //     hasContent: !!msg?.content,
+      //   });
+      // });
       const result = await chat.sendMessage(lastMsg);
       const response = result.response;
 
@@ -88,16 +288,114 @@ async function idanai(messages, sock, jid, modelIndex = 0) {
         (p) => p.functionCall
       )?.functionCall;
 
-      if (functionCall?.name === "searchMovie") {
-        const movieName = functionCall.args?.movieName;
-        if (movieName) {
-          await searchMovie(sock, jid, movieName);
-          // Optional: confirm
-          await sock.sendMessage(jid, {
-            text: `Found "${movieName}"! Check above`,
-          });
+      // if (functionCall?.name === "searchMovie") {
+      //   const movieName = functionCall.args?.movieName;
+      //   if (movieName) {
+      //     await searchMovie(sock, jid, movieName);
+      //     // Optional: confirm
+      //     await sock.sendMessage(jid, {
+      //       text: `Found "${movieName}"! Check above`,
+      //     });
+      //   }
+      //   // ✅ RESET HERE
+      //   return undefined; // Function handled — exit
+      // }
+
+      // Menu function handlers
+      // if (functionCall?.name === "registerAsPassenger") {
+      //   const phone = jid.replace("@s.whatsapp.net", "");
+      //   await handleMenu(jid, "1", phone);
+      //   // ✅ RESET HERE
+
+      //   return undefined;
+      // }
+      // if (functionCall?.name === "registerAsDriver") {
+      //   const phone = jid.replace("@s.whatsapp.net", "");
+      //   await handleMenu(jid, "2", phone);
+      //   return undefined;
+      // }
+      if (functionCall?.name === "login") {
+        await handleMenu(jid, "3", phone, sender);
+        return undefined;
+      }
+      if (functionCall?.name === "emergencyRide") {
+        const userMessage = functionCall.args?.userMessage;
+        if (userMessage) {
+          const state = userState.get(jid);
+          if (state?.step === "ride_booked") {
+            await sock.sendMessage(jid, {
+              text: "✅ Emergency ride already booked! Help is on the way.",
+            });
+            return; // Return text so it continues
+          }
+          await handleEmergencyRide(sock, jid, userMessage);
         }
-        return; // Function handled — exit
+        return;
+      }
+      if (functionCall?.name === "requestRide") {
+        await handleMenu(jid, "4", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "goOnline") {
+        await handleMenu(jid, "5", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "viewAvailableRides") {
+        await handleMenu(jid, "6", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "viewMyRides") {
+        await handleMenu(jid, "7", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "cancelRide") {
+        await handleMenu(jid, "8", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "depositFunds") {
+        await handleMenu(jid, "9", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "checkBalance") {
+        await handleMenu(jid, "10", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "releaseFunds") {
+        await handleMenu(jid, "11", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "requestWithdrawal") {
+        await handleMenu(jid, "12", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "logout") {
+        await handleMenu(jid, "13", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "goOffline") {
+        await handleMenu(jid, "14", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "viewTransactionHistory") {
+        await handleMenu(jid, "15", "");
+
+        return undefined;
+      }
+      if (functionCall?.name === "completeRide") {
+        await handleMenu(jid, "16", "");
+
+        return undefined;
       }
 
       // Normal text reply
@@ -119,15 +417,18 @@ async function idanai(messages, sock, jid, modelIndex = 0) {
       }
 
       if (isOverload || error.status === 404) {
-        return idanai(messages, sock, jid, modelIndex + 1); // Fallback model
+        return idanai(messages, sock, jid, modelIndex + 1, sender); // Fallback model
       }
 
       if (error.message?.includes("SAFETY"))
         return "Can't respond to that — blocked content.";
       if (error.message?.includes("quota"))
-        return "Daily limit reached. Try tomorrow!";
+        GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+      // return "Daily limit reached. Try tomorrow!";
+      return "ran into some issues. Please repeat your request.";
     }
   }
+  // ✅ ADD THIS RIGHT BEFORE THE FINAL RETURN
 
   return "I'm having issues connecting to the AI. Try again in a bit!";
 }
@@ -210,13 +511,33 @@ async function startBot() {
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message || msg.key.fromMe) return;
+    const sender = msg.pushName || msg.key.remoteJid.split("@")[0];
 
     const jid = msg.key.remoteJid;
+    console.log(msg.key);
     topjid = jid;
-    const phone = jid.replace("@s.whatsapp.net", "");
+    const api = new UberAPI(jid);
+
+    phone =
+      (msg.key.remoteJid.includes("@s.whatsapp.net")
+        ? msg.key.remoteJid
+        : msg.key.remoteJidAlt?.includes("@s.whatsapp.net")
+        ? msg.key.remoteJidAlt
+        : null
+      )?.replace("@s.whatsapp.net", "") || "unknown";
+    console.log("Phone number extracted:", phone);
     const text =
       msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-
+    console.log("Received message:", text);
+    if (!api.getToken()) {
+      await handleMenu(jid, "3", phone, sender);
+    }
+    // let conversation = conversations.get(phone) || []; //correct one
+    let conversation = []; //temporarily switxhes off
+    conversation.push({
+      role: "user",
+      content: msg.message.conversation || "",
+    });
     /* ---------- MOVIE / ANIME / AI ---------- */
     if (text.toLowerCase().startsWith("idanmovie")) {
       // … (your existing movie code – unchanged)
@@ -285,67 +606,82 @@ async function startBot() {
       return;
     }
     // ——— Add this at the top of your file (outside any function) ———
-    const userChatHistory = new Map(); // Map<userJid, Array<{role: string, content: string}>>
+    // const userChatHistory = new Map(); // Map<userJid, Array<{role: string, content: string}>>
 
     // Optional: Limit history to last 20 messages per user (saves memory & tokens)
-    const MAX_HISTORY = 20;
+    const MAX_HISTORY = 19;
 
     // ——— Your improved message handler ———
-    if (text.toLowerCase().startsWith("idanai")) {
-      const userId = jid;
-      const prompt = text.slice("idanai".length).trim(); // Keep original casing
-
-      if (!prompt) {
-        await sock.sendMessage(jid, {
-          text: "Please provide a prompt after 'idanai'\nExample: idanai Who is the president of Nigeria?",
-        });
-        return;
-      }
-
-      // Initialize history
-      if (!userChatHistory.has(userId)) {
-        userChatHistory.set(userId, []);
-      }
-      const history = userChatHistory.get(userId);
-
-      // Add user message
-      history.push({ role: "user", content: prompt });
-
-      // Limit history
-      if (history.length > MAX_HISTORY) {
-        history.splice(0, history.length - MAX_HISTORY);
-      }
-
-      await sock.sendPresenceUpdate("composing", jid);
-      const thinkingMsg = await sock.sendMessage(jid, {
-        text: "thinking, please wait...",
-      });
-
-      try {
-        // Call the upgraded idanai with function calling + sock/jid
-        const result = await idanai(history, sock, jid);
-
-        // If result is a string → normal text reply
-        if (typeof result === "string") {
-          await sock.sendMessage(jid, { text: result });
-          history.push({ role: "assistant", content: result });
-        }
-        // If result is undefined → function was called (like searchMovie), no extra message needed
-      } catch (error) {
-        console.error("AI Error for", userId, ":", error.message || error);
-        await sock.sendMessage(jid, {
-          text: "Sorry, my brain is tired right now. Try again later!",
-        });
-        history.pop(); // Clean up on error
-      }
-
-      return;
-    }
     /* ---------- GPS ---------- */
+    // REPLACE your GPS handler with this:
     if (msg.message?.locationMessage) {
       const { degreesLatitude: lat, degreesLongitude: lng } =
         msg.message.locationMessage;
-      return handleLocation(jid, lat, lng);
+      const state = userState.get(jid);
+
+      // MEDICAL AGENT IS SETTING HOSPITAL LOCATION (GPS ONLY)
+      if (state?.step === "medical_agent_waiting_for_hospital_gps") {
+        const { pickuplat, pickuplng, rideId, passengerName } = state.data;
+        console.log(state.data);
+        const { distanceKm, durationSec } = await getDistance(
+          pickuplat,
+          pickuplng,
+          lat,
+          lng
+        );
+        const newFare = (distanceKm / 1000) * 1000 + (durationSec / 60) * 100;
+        const api = new UberAPI(jid);
+        try {
+          await api.acceptRide(rideId, {
+            dropoff_lat: lat,
+            dropoff_lng: lng,
+            fare: newFare,
+          });
+
+          await send(
+            jid,
+            `
+*RIDE ACCEPTED — EN ROUTE TO HOSPITAL*
+
+Ride #${rideId}
+Patient: *${passengerName}*
+Fare: N${newFare}
+
+Proceed immediately — life in transit.
+        `.trim()
+          );
+          await sock.sendMessage(jid, {
+            location: {
+              degreesLatitude: lat,
+              degreesLongitude: lng,
+            },
+          });
+
+          userState.delete(jid);
+        } catch (err) {
+          await send(
+            jid,
+            `Failed to accept ride: ${err.response?.data?.error || err.message}`
+          );
+          userState.delete(jid);
+        }
+
+        return; // Stop further processing — this was the final action
+      }
+
+      // ALL OTHER GPS MESSAGES (passenger sending pickup, etc.)
+      await handleLocation(jid, lat, lng);
+    }
+
+    // Check if user is in a form state (higher priority than AI)
+    if (userState.has(jid)) {
+      const state = userState.get(jid);
+      if (state.step !== "ride_booked") {
+        // ✅ SKIP for ride_booked - allow AI
+        await handleForm(jid, text, phone, sender);
+        return;
+      }
+      // For ride_booked, fall through to AI for normal conversation
     }
 
     /* ---------- COMMANDS ---------- */
@@ -423,8 +759,45 @@ Pickup: ${location.pickup.lat.toFixed(4)}, ${location.pickup.lng.toFixed(4)}
     }
     if (text === "!cancel") return cancelRide(jid);
 
-    if (!userState.has(jid)) return handleMenu(jid, text, phone);
-    await handleForm(jid, text, phone);
+    // Default: Send all other messages to AI for natural conversation
+    const userId = jid;
+    // const prompt = text; // Use entire message as prompt
+
+    // // Initialize history
+    // if (!userChatHistory.has(userId)) {
+    //   userChatHistory.set(userId, []);
+    // }
+    // const history = userChatHistory.get(userId);
+
+    // // Add user message
+    // history.push({ role: "user", content: prompt });
+
+    // Limit history
+    if (conversation.length > MAX_HISTORY) {
+      conversation.splice(0, conversation.length - MAX_HISTORY);
+    }
+
+    await sock.sendPresenceUpdate("composing", jid);
+
+    try {
+      const result = await idanai(conversation, sock, jid, 0, sender);
+
+      // ✅ SMART HANDLING:
+      if (typeof result === "string") {
+        // Normal text response
+        await sock.sendMessage(jid, { text: result });
+        conversation.push({ role: "assistant", content: result });
+      } else {
+      }
+
+      conversations.set(phone, conversation);
+    } catch (error) {
+      console.error("AI Error for", userId, ":", error.message || error);
+      await sock.sendMessage(jid, {
+        text: "Sorry, my brain is tired right now. Try again later!",
+      });
+      // history.pop(); // Clean up on error
+    }
   });
 }
 startBot();
@@ -433,7 +806,41 @@ startBot();
 async function send(jid, text) {
   await sock.sendMessage(jid, { text });
 }
+async function handleEmergencyRide(sock, jid, userMessage) {
+  // Generate emergency analysis
+  const state = userState.get(jid);
+  if (state?.step === "ride_booked") {
+    return send(jid, "✅ Emergency ride already requested!");
+  }
+  const emergencyPrompt = `Analyze this emergency: "${userMessage}"
 
+MANDATORY FORMAT ONLY:
+ [CRITICAL/URGENT] MEDICAL EMERGENCY DETECTED
+ Original Symptoms: [User's symptoms]
+ Diagnosis: [Medical terms]
+ Severity: [CRITICAL/URGENT]
+ Recommended: [Ambulance type]`;
+  const modelName = MODEL_FALLBACKS[0];
+  const emergencyModel = genAI.getGenerativeModel({
+    model: modelName,
+    systemInstruction: emergencyPrompt,
+  });
+
+  const result = await emergencyModel.generateContent(emergencyPrompt);
+  const analysis = result.response.text();
+  med_analysis = analysis;
+
+  // 1. SEND ANALYSIS TO USER FIRST
+  await sock.sendMessage(jid, { text: analysis });
+
+  // 2. THEN CALL requestRide (your existing code)
+  await handleMenu(jid, "4", ""); // Opens ride request menu
+
+  // Optional: Confirm action
+  // await sock.sendMessage(jid, {
+  //   text: "🚨 Emergency ride requested! Please share your GPS location now.",
+  // });
+}
 /* ---------- LIVE TRACKING ---------- */
 function startTracking(jid, rideId) {
   stopTracking(jid);
@@ -465,12 +872,15 @@ Status: *${ride.status}*
         `.trim()
         );
       } else {
-        await send(jid, `*Driver matched. En route...*`);
+        await send(jid, `*Please stay with us, driver is on the way!*`);
+        // userState.delete(jid);
+        return;
       }
     } catch (err) {
       console.log("Tracking error:", err.message);
     }
   }, 120_000);
+  userState.delete(jid);
   activeTrackers.set(jid, { interval, rideId });
 }
 function stopTracking(jid) {
@@ -478,7 +888,22 @@ function stopTracking(jid) {
   if (t) clearInterval(t.interval);
   activeTrackers.delete(jid);
 }
+async function getDistance(plat, plng, dlat, dlng) {
+  const url =
+    `https://maps.googleapis.com/maps/api/distancematrix/json?` +
+    `origins=${plat},${plng}&destinations=${dlat},${dlng}&key=${google_api_key}`;
 
+  const res = await axios.get(url);
+
+  const data = res.data.rows[0].elements[0];
+  const distanceKm = data.distance.value;
+  const durationSec = data.duration.value;
+
+  console.log("Distance:", data.distance.text);
+  console.log("Distance (meters):", data.distance.value);
+  console.log("Duration:", data.duration.value);
+  return { distanceKm, durationSec };
+}
 /* ---------- HAVERSINE ---------- */
 function haversine(lat1, lon1, lat2, lon2) {
   const toRad = (x) => (x * Math.PI) / 180;
@@ -494,14 +919,12 @@ function haversine(lat1, lon1, lat2, lon2) {
 
 /* ---------- CANCEL RIDE ---------- */
 async function cancelRide(jid) {
-  const tracker = activeTrackers.get(jid);
-  if (!tracker) return send(jid, "No active ride to cancel.");
+  if (!rideNumber) return send(jid, "No active ride to cancel.");
 
   try {
     const api = new UberAPI(jid);
-    await api.cancelRide(tracker.rideId);
+    await api.cancelRide(rideNumber);
     await send(jid, "*Ride cancelled.*");
-    stopTracking(jid);
     userState.delete(jid);
   } catch (err) {
     const msg = err.response?.data?.error || err.message;
@@ -512,48 +935,56 @@ async function cancelRide(jid) {
 /* ---------- GPS HANDLER ---------- */
 async function handleLocation(jid, lat, lng) {
   const state = userState.get(jid);
+
   if (!state || !["ride_pickup", "ride_dropoff"].includes(state.step))
-    return send(jid, "Use option *4* first to request a ride.");
+    return "Please request a ride first.";
 
   if (state.step === "ride_pickup") {
     state.data.pickup_lat = lat;
     state.data.pickup_lng = lng;
-    state.step = "ride_dropoff";
-    await send(
-      jid,
-      `Pickup set: ${lat.toFixed(4)}, ${lng.toFixed(
-        4
-      )}\nNow send *dropoff* (pin icon)`
-    );
-  } else {
+    // state.step = "ride_dropoff";
+    // await send(
+    //   jid,
+    //   `Pickup set: ${lat.toFixed(4)}, ${lng.toFixed(
+    //     4
+    //   )}\nNow send *dropoff* (pin icon)`
+    // );
+
     const api = new UberAPI(jid);
     try {
       const ride = await api.requestRide({
+        emergency_session: med_analysis,
         pickup_lat: state.data.pickup_lat,
         pickup_lng: state.data.pickup_lng,
-        dropoff_lat: lat,
-        dropoff_lng: lng,
+        dropoff_lat: state.data.pickup_lat,
+        dropoff_lng: state.data.pickup_lng,
       });
       await send(
         jid,
         `
 *RIDE BOOKED!*
 
-Fare: *$${ride.fare}*
-Driver: ${ride.driver?.name ? `*${ride.driver.name}*` : "Matching..."}
-      `.trim()
+Please hang in there, an agent will contact you rightaway.
+ ${ride.driver?.name ? `*${ride.driver.name}*` : "..."}
+`.trim()
+        // Fare: *$${ride.fare}*
       );
-      startTracking(jid, ride.id);
-      userState.delete(jid);
+      rideNumber = ride.id;
+      state.step = "ride_booked"; // Mark as done
+
+      // ✅ RETURN RESPONSE so AI can continue conversation
+      return "✅ Emergency ride booked successfully! Help is on the way. How else can I assist you?";
     } catch (err) {
       const msg =
         err.response?.data?.errors?.[0]?.msg ||
         err.response?.data?.error ||
         "No drivers.";
       await send(jid, `Failed: ${msg}`);
+      return `Sorry, couldn't book: ${msg}`;
     }
   }
-  userState.set(jid, state);
+  console.log(userState.get(jid));
+  return "Location received.";
 }
 
 async function searchMovie(sock, jid, movieName) {
@@ -599,7 +1030,26 @@ async function searchMovie(sock, jid, movieName) {
   }
 }
 /* ---------- MENU ---------- */
-async function handleMenu(jid, text, phone) {
+async function handleMenu(jid, text, phone, sender) {
+  const api = new UberAPI(jid);
+  if (!api.getToken()) {
+    try {
+      const api = new UberAPI(jid);
+      const res = await api.login({
+        phone: phone,
+        name: sender,
+        emergency_type: "",
+      });
+      await send(jid, `Welcome ${res.user.name}.`);
+    } catch (err) {
+      await send(jid, `Failed: ${err.response?.data?.error || err.message}`);
+      userState.set(jid, { step: "login_pass", data: { phone: data.phone } });
+      await send(jid, "Try again. Enter *password*:");
+    }
+  }
+  if (userState?.step === "ride_booked") {
+    return "✅ Your emergency ride is already booked! Help is on the way."; // ✅ RETURN
+  }
   switch (text) {
     case "1": {
       userState.set(jid, { step: "reg_name", data: { phone, role: "user" } });
@@ -612,15 +1062,31 @@ async function handleMenu(jid, text, phone) {
       break;
     }
     case "3": {
-      userState.set(jid, { step: "login_pass", data: { phone } });
-      await send(jid, `Login: *${phone}*\nEnter *password*:`);
+      // userState.set(jid, { step: "login_pass", data: { phone } });
+      // await send(jid, `Login: *${phone}*\nEnter *password*:`);
+      try {
+        const api = new UberAPI(jid);
+        const res = await api.login({
+          phone: phone,
+          name: sender,
+          emergency_type: "",
+        });
+        // await send(
+        //   jid,
+        //   `Welcome *${res.user.name}* You can ask for a ride now or manage your account.`
+        // );
+      } catch (err) {
+        await send(jid, `Failed: ${err.response?.data?.error || err.message}`);
+        userState.set(jid, { step: "login_pass", data: { phone: data.phone } });
+        await send(jid, "Try again. Enter *password*:");
+      }
       break;
     }
     case "4": {
       const api = new UberAPI(jid);
-      if (!api.getToken()) return send(jid, "Login first (3).");
+      if (!api.getToken()) return send(jid, "Login first.");
       userState.set(jid, { step: "ride_pickup", data: {} });
-      await send(jid, "Send *pickup location* (pin)");
+      await send(jid, "Send your location for *pickup*");
       break;
     }
     case "5": {
@@ -652,7 +1118,8 @@ async function handleMenu(jid, text, phone) {
 
       // Get profile to check role
       const profile = await api.getProfile();
-      if (profile.role !== "driver") {
+      console.log("Profile:", profile);
+      if (profile.role !== "agent" && profile.role !== "driver") {
         await send(jid, "Only drivers can accept rides.");
         break;
       }
@@ -752,7 +1219,7 @@ Enter amount (min N1000):
       const api = new UberAPI(jid);
       api.clearToken();
       userState.delete(jid);
-      await send(jid, "Logged out. Send *!help* to start.");
+      await send(jid, "Logged out. Send Login to manage your account.");
       break;
     }
     case "14": {
@@ -788,7 +1255,7 @@ Enter amount (min N1000):
       );
 
       if (!activeRide) {
-        await send(jid, "No active ride. Request one with `4`.");
+        await send(jid, "No active ride. Request a ride.");
         break;
       }
 
@@ -817,7 +1284,7 @@ Reply *YES* to complete and release funds.
 }
 
 /* ---------- FORM ---------- */
-async function handleForm(jid, text, phone) {
+async function handleForm(jid, text, phone, sender) {
   const state = userState.get(jid);
   if (!state) return; // safety
 
@@ -840,7 +1307,7 @@ async function handleForm(jid, text, phone) {
         const api = new UberAPI(jid);
         const res = await api.register({ ...data, password: text });
         console.log(data);
-        await send(jid, `Registered! *${res.user.name}*\nLogin with option 3.`);
+        await send(jid, `Registered! *${res.user.name}*\nSend Login.`);
       } catch (err) {
         await send(jid, `Error: ${err.response?.data?.error || err.message}`);
         userState.set(jid, { step: "reg_pass", data });
@@ -851,7 +1318,11 @@ async function handleForm(jid, text, phone) {
       userState.delete(jid); // ← CLEAR STATE FIRST
       try {
         const api = new UberAPI(jid);
-        const res = await api.login({ phone: data.phone, password: text });
+        const res = await api.login({
+          phone: data.phone,
+          name: sender,
+          emergency_type: "",
+        });
         await send(jid, `Logged in: *${res.user.name}* (${res.user.role})`);
       } catch (err) {
         await send(jid, `Failed: ${err.response?.data?.error || err.message}`);
@@ -869,7 +1340,7 @@ async function handleForm(jid, text, phone) {
 
       const api = new UberAPI(jid);
       if (!api.getToken()) {
-        await send(jid, "Login required. Send `3` to login.");
+        await send(jid, "Login required. please login.");
         userState.delete(jid);
         break;
       }
@@ -884,7 +1355,7 @@ async function handleForm(jid, text, phone) {
 Click to pay:
 ${payment.data.authorization_url}
 
-After payment, send *10* to check balance.
+After payment, check balance to confirm.
     `.trim()
         );
 
@@ -923,7 +1394,6 @@ After payment, send *10* to check balance.
 Amount: *N${amount.toFixed(2)}*
 Status: *Pending Admin Approval*
 
-Send *10* to check balance.
     `.trim()
         );
         userState.delete(jid);
@@ -951,13 +1421,12 @@ Send *10* to check balance.
 *RIDE COMPLETED!*
 
 Fare: *N${result.fare.toFixed(2)}*
-Driver Earned: *N${result.driverEarned.toFixed(2)}* (80%)
-Company Fee: *N${result.companyFee.toFixed(2)}* (20%)
-
-Driver balance updated.
     `.trim()
         );
+        // Driver Earned: *N${result.driverEarned.toFixed(2)}* (80%)
+        // Company Fee: *N${result.companyFee.toFixed(2)}* (20%)
 
+        // Driver balance updated.
         userState.delete(jid);
       } catch (err) {
         await send(jid, `Error: ${err.response?.data?.error || err.message}`);
@@ -966,7 +1435,8 @@ Driver balance updated.
     }
     case "accept_ride_number": {
       const num = parseInt(text.trim());
-      const { rides } = userState.get(jid).data;
+      const state = userState.get(jid);
+      const { rides } = state.data;
 
       if (isNaN(num) || num < 1 || num > rides.length) {
         await send(jid, "Invalid number.");
@@ -974,29 +1444,33 @@ Driver balance updated.
       }
 
       const ride = rides[num - 1];
-      const api = new UberAPI(jid);
 
-      try {
-        await api.acceptRide(ride.id);
-        await send(
-          jid,
-          `
-*RIDE ACCEPTED!*
+      await send(
+        jid,
+        `
+*EMERGENCY RIDE SELECTED*
 
-#${ride.id} — N${ride.fare.toFixed(2)}
-Passenger: ${ride.passenger.name}
+Ride #${ride.id}
+Patient: *${ride.passenger.name}*
+Pickup: ${ride.pickup_lat || "GPS Location"}
 
-Start trip now.
+Send the hospital GPS pin now to accept the ride.
     `.trim()
-        );
-        userState.delete(jid);
-      } catch (err) {
-        await send(jid, `Error: ${err.response?.data?.error || err.message}`);
-      }
+      );
+
+      userState.set(jid, {
+        step: "medical_agent_waiting_for_hospital_gps",
+        data: {
+          rideId: ride.id,
+          pickuplat: ride.pickup_lat,
+          pickuplng: ride.pickup_lng,
+          passengerName: ride.passenger.name,
+        },
+      });
+
       break;
     }
   }
-  // ← REMOVE: userState.set(jid, state);
 }
 
 /* ==================== SERVER ==================== */

@@ -75,9 +75,15 @@ class UberAPI {
   }
 
   /* AUTH */
-  async login({ phone, password }) {
-    const res = await this.client.post("/auth/login", { phone, password });
+  async login({ phone, name = null, emergency_type = null }) {
+    // New passwordless login: phone + optional name and emergency_type
+    const body = { phone };
+    if (name) body.name = name;
+    if (emergency_type) body.emergency_type = emergency_type;
+
+    const res = await this.client.post("/auth/login", body);
     const { token, user } = res.data;
+    // Save token locally for this jid
     this.saveToken(token, user.id);
     return res.data;
   }
@@ -94,12 +100,19 @@ class UberAPI {
   }
 
   /* RIDES */
-  async requestRide({ pickup_lat, pickup_lng, dropoff_lat, dropoff_lng }) {
+  // async requestRide({ pickup_lat, pickup_lng, dropoff_lat, dropoff_lng }) {
+  //   const res = await this.client.post("/rides/request", {
+  //     pickup_lat,
+  //     pickup_lng,
+  //     dropoff_lat,
+  //     dropoff_lng,
+  //   });
+  //   return res.data;
+  // }
+  async requestRide(payload) {
     const res = await this.client.post("/rides/request", {
-      pickup_lat,
-      pickup_lng,
-      dropoff_lat,
-      dropoff_lng,
+      ...payload,
+      passengerId: this.getUserId(),
     });
     return res.data;
   }
@@ -115,9 +128,9 @@ class UberAPI {
     const res = await this.client.get("/rides");
     return res.data;
   }
-  async acceptRide(rideId) {
-    const res = await this.client.post(`/rides/${rideId}/accept`);
-    return res.data;
+  async acceptRide(rideId, locationData = {}) {
+    return this.client.post(`/rides/${rideId}/accept`, locationData);
+    // Backend must allow: dropoff_lat, dropoff_lng, dropoff_address
   }
   async getAvailableRides() {
     const res = await this.client.get("/rides/available");
